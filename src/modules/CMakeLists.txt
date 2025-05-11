@@ -24,6 +24,10 @@ if(MOD_JACKRACK)
   add_subdirectory(jackrack)
 endif()
 
+if(MOD_ALIVE)
+  add_subdirectory(alive)
+endif()
+
 if(MOD_KDENLIVE)
   add_subdirectory(kdenlive)
 endif()
