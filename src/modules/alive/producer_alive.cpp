@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+extern "C" {
 // Forward declarations
 static int producer_get_frame(mlt_producer producer, mlt_frame_ptr frame, int index);
 static void producer_close(mlt_producer producer);
@@ -99,7 +100,7 @@ static int get_image(mlt_frame frame, uint8_t **image, mlt_image_format *format,
     int size = mlt_image_format_size(*format, *width, *height, NULL);
 
     // Allocate the image
-    *image = mlt_pool_alloc(size);
+    *image = static_cast<uint8_t *>(mlt_pool_alloc(size));
     if (!*image)
         return 1;
 
@@ -201,3 +202,5 @@ static void producer_close(mlt_producer producer)
     // Free the producer
     free(producer);
 }
+
+} // extern "C"

@@ -1,6 +1,6 @@
 add_library(alive MODULE
   factory.c
-  producer_alive.c
+  producer_alive.cpp
 )
 
 file(GLOB YML "*.yml")
@@ -18,5 +18,5 @@ install(TARGETS alive LIBRARY DESTINATION ${MLT_INSTALL_MODULE_DIR})
 
 install(FILES
   producer_alive.yml
-  DESTINATION ${MLT_INSTALL_DATA_DIR}/decklink
+  DESTINATION ${MLT_INSTALL_DATA_DIR}/alive
 )
