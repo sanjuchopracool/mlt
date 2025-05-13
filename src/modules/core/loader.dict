@@ -52,4 +52,5 @@ plain:https://*=webvfx:plain:
 *.webp=qimage,avformat,glaxnimate
 *.xcf=qimage
 *.xml=xml
+*.alive=alive
 *=avformat

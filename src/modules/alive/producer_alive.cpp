@@ -20,49 +20,15 @@
 #include <framework/mlt.h>
 #include <stdlib.h>
 #include <string.h>
+#include <alive_api.h>
+#include <mutex>
+#include <iostream>
+#include <cmath>
 
-// Forward declarations
-static int producer_get_frame(mlt_producer producer, mlt_frame_ptr frame, int index);
-static void producer_close(mlt_producer producer);
-
-/** Initialize the producer.
- */
-mlt_producer producer_alive_init(mlt_profile profile, mlt_service_type type, const char *id, char *arg)
-{
-    // Create a producer
-    mlt_producer producer = mlt_producer_new(profile);
-
-    // Initialize if successful
-    if (producer) {
-        // Get the properties
-        mlt_properties properties = MLT_PRODUCER_PROPERTIES(producer);
-
-        // Set callbacks
-        producer->get_frame = producer_get_frame;
-        producer->close = (mlt_destructor)producer_close;
-
-        // Set default properties
-        mlt_properties_set(properties, "resource", arg ? arg : "alive_resource");
-
-        // Set default video properties
-        mlt_properties_set_int(properties, "width", profile->width);
-        mlt_properties_set_int(properties, "height", profile->height);
-        mlt_properties_set_double(properties, "aspect_ratio", mlt_profile_sar(profile));
-        mlt_properties_set_int(properties, "progressive", 1);
-        // mlt_properties_set_double(properties, "fps", profile->fps);
-
-        // Set length to 100 frames by default
-        mlt_properties_set_position(properties, "length", 100);
-        mlt_properties_set_position(properties, "out", 99);
-
-        // Register the producer for clean-up
-        mlt_properties_set_data(properties, "_producer", producer, 0, NULL, NULL);
-
-        return producer;
-    }
-
-    return NULL;
+namespace {
+std::once_flag g_init_alive_library;
 }
+
 /** Generate the image.
  *
  * @param frame a frame object
@@ -99,7 +65,7 @@ static int get_image(mlt_frame frame, uint8_t **image, mlt_image_format *format,
     int size = mlt_image_format_size(*format, *width, *height, NULL);
 
     // Allocate the image
-    *image = mlt_pool_alloc(size);
+    *image = static_cast<uint8_t *>(mlt_pool_alloc(size));
     if (!*image)
         return 1;
 
@@ -190,14 +156,147 @@ static int producer_get_frame(mlt_producer producer, mlt_frame_ptr frame, int in
     return 1;
 }
 
+class Alive
+{
+private:
+    mlt_producer m_producer = nullptr;
+    char m_error[1024];
+    void* m_alive_internal = nullptr;;
+
+public:
+    mlt_profile m_profile = nullptr;
+    ~Alive() {
+        if (m_alive_internal) {
+            alive_close_composition(m_alive_internal, m_error);
+            print_error();
+        }
+    }
+
+    void setProducer(mlt_producer producer) { m_producer = producer; }
+
+    mlt_producer producer() const { return m_producer; }
+
+    mlt_service service() const { return MLT_PRODUCER_SERVICE(m_producer); }
+
+    mlt_properties properties() const { return MLT_PRODUCER_PROPERTIES(m_producer); }
+
+    int32_t width() const {return alive_compoistion_width(m_alive_internal);}
+    int32_t height() const {return alive_compoistion_height(m_alive_internal);}
+
+    int duration() const
+    {
+        auto frames = alive_composition_last_frame(m_alive_internal)
+                      - alive_composition_first_frame(m_alive_internal);
+        return toMltFps(frames);
+    }
+
+    int toMltFps(float frame) const
+    {
+        return std::round(frame / fps() * m_profile->frame_rate_num / m_profile->frame_rate_den);
+    }
+
+    float toGlaxnimateFps(float frame) const
+    {
+        return frame * fps() * m_profile->frame_rate_den / m_profile->frame_rate_num;
+    }
+
+    int firstFrame() const { return toMltFps(alive_composition_first_frame(m_alive_internal)); }
+
+    float fps() const { return alive_composition_fps(m_alive_internal); }
+
+    int getImage(mlt_frame frame,
+                 uint8_t **buffer,
+                 mlt_image_format *format,
+                 int *width,
+                 int *height,
+                 int writable)
+    {
+        return 0;
+    }
+
+    bool open(const char *fileName)
+    {
+        m_alive_internal = alive_open_composition(fileName, m_error);
+
+        if (m_alive_internal) {
+            return true;
+        } else {
+            print_error();
+            return false;
+        }
+    }
+
+    void print_error() {
+        std::cout << m_error <<std::endl;
+    }
+};
+
+// Forward declarations
+static int producer_get_frame(mlt_producer producer, mlt_frame_ptr frame, int index);
+static void producer_close(mlt_producer producer);
+
+/** Initialize the producer.
+ */
+mlt_producer producer_alive_init(mlt_profile profile, mlt_service_type type, const char *id, char *arg)
+{
+    // Allocate the producer
+    Alive *glax = new Alive();
+    mlt_producer producer = (mlt_producer) calloc(1, sizeof(*producer));
+
+    if (!glax || mlt_producer_init(producer, glax)) {
+        mlt_producer_close(producer);
+        return NULL;
+    }
+    // If allocated and initializes
+    if (glax->open(arg)) {
+        glax->setProducer(producer);
+        glax->m_profile = profile;
+        producer->close = (mlt_destructor) producer_close;
+        producer->get_frame = producer_get_frame;
+
+        auto properties = glax->properties();
+        mlt_properties_set(properties, "resource", arg);
+        mlt_properties_set(properties, "background", "#00000000");
+        mlt_properties_set_int(properties, "aspect_ratio", 1);
+        mlt_properties_set_int(properties, "progressive", 1);
+        mlt_properties_set_int(properties, "seekable", 1);
+        mlt_properties_set_int(properties, "meta.media.width", glax->width());
+        mlt_properties_set_int(properties, "meta.media.height", glax->height());
+        mlt_properties_set_int(properties, "meta.media.sample_aspect_num", 1);
+        mlt_properties_set_int(properties, "meta.media.sample_aspect_den", 1);
+        mlt_properties_set_double(properties, "meta.media.frame_rate", glax->fps());
+        mlt_properties_set_int(properties, "out", glax->duration() - 1);
+        mlt_properties_set_int(properties, "length", glax->duration());
+        mlt_properties_set_int(properties, "first_frame", glax->firstFrame());
+        mlt_properties_set(properties, "eof", "loop");
+    }
+    return producer;
+}
+
 /** Close the producer.
  */
 static void producer_close(mlt_producer producer)
 {
-    // Close the parent
-    producer->close = NULL;
+    delete static_cast<Alive *>(producer->child);
+    producer->close = nullptr;
     mlt_producer_close(producer);
+}
 
-    // Free the producer
-    free(producer);
+static mlt_properties metadata(mlt_service_type type, const char *id, void *data)
+{
+    if (type != mlt_service_producer_type) {
+        return NULL;
+    }
+    return mlt_properties_parse_yaml("producer_alive.yml");
+}
+
+MLT_REPOSITORY
+{
+    char error[1024];
+    std::call_once(g_init_alive_library, alive_init,"home/sanju/inae_resources", error, log_level::trace);
+    std::cout << error << std::endl;
+    // Register our alive producer
+    MLT_REGISTER(mlt_service_producer_type, "alive", producer_alive_init);
+    // Register metadata
+    MLT_REGISTER_METADATA(mlt_service_producer_type, "alive",  metadata, NULL);
 }
