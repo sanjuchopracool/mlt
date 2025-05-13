@@ -60,7 +60,7 @@ public:
     int duration() const
     {
         auto frames = alive_composition_last_frame(m_alive_internal)
-                      - alive_composition_first_frame(m_alive_internal);
+                - alive_composition_first_frame(m_alive_internal);
         return toMltFps(frames);
     }
 
@@ -69,7 +69,7 @@ public:
         return std::round(frame / fps() * m_profile->frame_rate_num / m_profile->frame_rate_den);
     }
 
-    float toGlaxnimateFps(float frame) const
+    float toAliveFps(float frame) const
     {
         return frame * fps() * m_profile->frame_rate_den / m_profile->frame_rate_num;
     }
@@ -85,19 +85,45 @@ public:
                  int *height,
                  int writable)
     {
-        return 0;
+        int error = 0;
+        auto pos = mlt_frame_original_position(frame);
+        if (mlt_properties_get(properties(), "eof")
+                && !::strcmp("loop", mlt_properties_get(properties(), "eof"))) {
+            pos %= duration() - 1;
+        }
+        auto bg = mlt_properties_get_color(properties(), "background");
+        alive_color alive_bg{bg.r, bg.g, bg.b, bg.a};
+        pos += toMltFps(firstFrame());
+        auto image = alive_composition_draw(m_alive_internal,
+                                            toAliveFps(pos),
+                                            *width, *height,
+                                            alive_bg);
+
+        *format = mlt_image_rgba;
+        int size = mlt_image_format_size(*format, *width, *height, NULL);
+        *buffer = static_cast<uint8_t *>(mlt_pool_alloc(size));
+        memcpy(*buffer, image, size);
+        error = mlt_frame_set_image(frame, *buffer, size, mlt_pool_release);
+
+        return error;
     }
 
     bool open(const char *fileName)
     {
-        m_alive_internal = alive_open_composition(fileName, m_error);
-
-        if (m_alive_internal) {
-            return true;
-        } else {
-            print_error();
-            return false;
+        try {
+            m_alive_internal = alive_open_composition(fileName, m_error);
+            if (m_alive_internal) {
+                return true;
+            } else {
+                print_error();
+                return false;
+            }
         }
+        catch(...) {
+            std::cout << "Exception thrown while opening " << fileName
+                      << ".Make sure it has the correct version." << std::endl;
+        }
+        return false;
     }
 
     void print_error() {
@@ -156,63 +182,20 @@ mlt_producer producer_alive_init(mlt_profile profile, mlt_service_type type, con
  * @param writable whether the returned buffer can be written to
  * @return a pointer to the image data
  */
-static int get_image(mlt_frame frame, uint8_t **image, mlt_image_format *format, int *width, int *height, int writable)
+static int get_image(mlt_frame frame, uint8_t **buffer, mlt_image_format *format, int *width, int *height, int writable)
 {
-    // Get the properties of the frame
-    mlt_properties properties = MLT_FRAME_PROPERTIES(frame);
+    auto producer = static_cast<mlt_producer>(mlt_frame_pop_service(frame));
+    auto alive = static_cast<Alive *>(producer->child);
 
-    // Get the requested dimensionss
-    int requested_width = *width;
-    int requested_height = *height;
-
-    // Use the requested or the default values
-    *width = requested_width > 0 ? requested_width : mlt_properties_get_int(properties, "meta.media.width");
-    *height = requested_height > 0 ? requested_height : mlt_properties_get_int(properties, "meta.media.height");
-
-    // Make sure we have valid dimensions
-    if (*width <= 0)
-        *width = 720;
-    if (*height <= 0)
-        *height = 576;
-
-    // Determine image format
-    if (*format == mlt_image_none || *format == mlt_image_movit)
-        *format = mlt_image_rgba;
-
-    // Calculate image size based on format
-    int size = mlt_image_format_size(*format, *width, *height, NULL);
-
-    // Allocate the image
-    *image = static_cast<uint8_t *>(mlt_pool_alloc(size));
-    if (!*image)
-        return 1;
-
-    // Update the frame properties
-    mlt_frame_set_image(frame, *image, size, mlt_pool_release);
-
-    // Get the color values stored in the frame properties
-    int red = mlt_properties_get_int(properties, "alive_red");
-    int green = mlt_properties_get_int(properties, "alive_green");
-    int blue = mlt_properties_get_int(properties, "alive_blue");
-
-    // Fill the image buffer with our color
-    if (*format == mlt_image_rgba) {
-        uint8_t *p = *image;
-        int i, count = *width * *height;
-
-        for (i = 0; i < count; i++) {
-            *p++ = red;    // R
-            *p++ = green;  // G
-            *p++ = blue;   // B
-            *p++ = 255;    // A (fully opaque)
+    if (mlt_properties_get_int(alive->properties(), "refresh")) {
+        mlt_properties_clear(alive->properties(), "refresh");
+        alive->open(mlt_properties_get(alive->properties(), "resource"));
+        if (alive->duration() > mlt_properties_get_int(alive->properties(), "length")) {
+            mlt_properties_set_int(alive->properties(), "length", alive->duration());
         }
-    } else {
-        // Handle other formats if needed
-        // (for simplicity, we're just handling RGBA format here)
-        memset(*image, 128, size);
     }
 
-    return 0;
+    return alive->getImage(frame, buffer, format, width, height, writable);
 }
 
 /** Get the next frame.
@@ -224,54 +207,25 @@ static int get_image(mlt_frame frame, uint8_t **image, mlt_image_format *format,
  */
 static int producer_get_frame(mlt_producer producer, mlt_frame_ptr frame, int index)
 {
-    // Create an empty frame
     *frame = mlt_frame_init(MLT_PRODUCER_SERVICE(producer));
+    mlt_properties frame_properties = MLT_FRAME_PROPERTIES(*frame);
 
-    if (*frame) {
-        // Get the producer properties
-        mlt_properties producer_props = MLT_PRODUCER_PROPERTIES(producer);
+    // Set frame properties
+    mlt_properties_set_int(frame_properties, "progressive", 1);
+    // Inform framework that this producer creates rgba frames by default
+    mlt_properties_set_int(frame_properties, "format", mlt_image_rgba);
+    double force_ratio = mlt_properties_get_double(MLT_PRODUCER_PROPERTIES(producer),
+                                                   "force_aspect_ratio");
+    if (force_ratio > 0.0)
+        mlt_properties_set_double(frame_properties, "aspect_ratio", force_ratio);
+    else
+        mlt_properties_set_double(frame_properties, "aspect_ratio", 1.0);
 
-        // Get the frame properties
-        mlt_properties frame_props = MLT_FRAME_PROPERTIES(*frame);
-
-        // Set frame properties
-        mlt_properties_set_int(frame_props, "progressive",
-                               mlt_properties_get_int(producer_props, "progressive"));
-        mlt_properties_set_double(frame_props, "aspect_ratio",
-                                  mlt_properties_get_double(producer_props, "aspect_ratio"));
-
-        // Get the current position
-        mlt_position position = mlt_producer_position(producer);
-
-        // Set the position on the frame
-        mlt_frame_set_position(*frame, position);
-
-        // Calculate color values based on position
-        uint8_t red = (position * 2) % 255;
-        uint8_t green = (position * 3) % 255;
-        uint8_t blue = (position * 5) % 255;
-
-        // Store these color values for use in get_image callbacks
-        mlt_properties_set_int(frame_props, "alive_red", red);
-        mlt_properties_set_int(frame_props, "alive_green", green);
-        mlt_properties_set_int(frame_props, "alive_blue", blue);
-
-        // Setup callbacks
-        mlt_frame_push_get_image(*frame, get_image);
-
-        // Update timecode on the frame
-        mlt_properties_set_int(frame_props, "meta.media.width",
-                               mlt_properties_get_int(producer_props, "width"));
-        mlt_properties_set_int(frame_props, "meta.media.height",
-                               mlt_properties_get_int(producer_props, "height"));
-
-        // Advance the producer
-        mlt_producer_prepare_next(producer);
-
-        return 0;
-    }
-
-    return 1;
+    mlt_frame_set_position(*frame, mlt_producer_position(producer));
+    mlt_frame_push_service(*frame, producer);
+    mlt_frame_push_get_image(*frame, get_image);
+    mlt_producer_prepare_next(producer);
+    return 0;
 }
 
 /** Close the producer.
@@ -295,7 +249,7 @@ MLT_REPOSITORY
 {
     auto init_alive_lib = []{
         char error[1024];
-        alive_init("home/sanju/inae_resources", error, log_level::trace);
+        alive_init("/home/sanju/inae_resources", error, log_level::trace);
         std::cout << error << std::endl;
     };
     std::call_once(g_init_alive_library, init_alive_lib);
