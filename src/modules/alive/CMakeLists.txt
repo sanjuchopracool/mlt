@@ -1,5 +1,4 @@
 add_library(alive MODULE
-  factory.c
   producer_alive.cpp
 )
 
@@ -10,7 +9,10 @@ add_custom_target(Other_alive_Files SOURCES
 
 target_compile_options(alive PRIVATE ${MLT_COMPILE_OPTIONS})
 
-target_link_libraries(alive PRIVATE mlt)
+target_include_directories(alive PRIVATE /home/sanju/PROJECTS/inae_core/src/c_wrapper/)
+target_link_directories(alive PRIVATE /home/sanju/PROJECTS/inae_core/build/Desktop-Debug/Debug/lib/)
+
+target_link_libraries(alive PRIVATE mlt c_wrapper)
 
 set_target_properties(alive PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${MLT_MODULE_OUTPUT_DIRECTORY}")
 
