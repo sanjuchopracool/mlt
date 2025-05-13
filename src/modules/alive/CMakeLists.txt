@@ -12,7 +12,7 @@ target_compile_options(alive PRIVATE ${MLT_COMPILE_OPTIONS})
 target_include_directories(alive PRIVATE /home/sanju/PROJECTS/inae_core/src/c_wrapper/)
 target_link_directories(alive PRIVATE /home/sanju/PROJECTS/inae_core/build/Desktop-Debug/Debug/lib/)
 
-target_link_libraries(alive PRIVATE mlt c_wrapper)
+target_link_libraries(alive PRIVATE mlt core c_wrapper)
 
 set_target_properties(alive PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${MLT_MODULE_OUTPUT_DIRECTORY}")
 

@@ -133,8 +133,8 @@ public:
 extern "C" {
 
 // Forward declarations
-static int producer_get_frame(mlt_producer producer, mlt_frame_ptr frame, int index);
-static void producer_close(mlt_producer producer);
+static int producer_alive_get_frame(mlt_producer producer, mlt_frame_ptr frame, int index);
+static void producer_alive_close(mlt_producer producer);
 
 /** Initialize the producer.
  */
@@ -152,8 +152,8 @@ mlt_producer producer_alive_init(mlt_profile profile, mlt_service_type type, con
     if (alive->open(arg)) {
         alive->setProducer(producer);
         alive->m_profile = profile;
-        producer->close = (mlt_destructor) producer_close;
-        producer->get_frame = producer_get_frame;
+        producer->close = (mlt_destructor) producer_alive_close;
+        producer->get_frame = producer_alive_get_frame;
 
         auto properties = alive->properties();
         mlt_properties_set(properties, "resource", arg);
@@ -182,7 +182,7 @@ mlt_producer producer_alive_init(mlt_profile profile, mlt_service_type type, con
  * @param writable whether the returned buffer can be written to
  * @return a pointer to the image data
  */
-static int get_image(mlt_frame frame, uint8_t **buffer, mlt_image_format *format, int *width, int *height, int writable)
+static int produce_alive_get_image(mlt_frame frame, uint8_t **buffer, mlt_image_format *format, int *width, int *height, int writable)
 {
     auto producer = static_cast<mlt_producer>(mlt_frame_pop_service(frame));
     auto alive = static_cast<Alive *>(producer->child);
@@ -205,7 +205,7 @@ static int get_image(mlt_frame frame, uint8_t **buffer, mlt_image_format *format
  * @param index the frame number
  * @return 0 if successful, otherwise non-zero
  */
-static int producer_get_frame(mlt_producer producer, mlt_frame_ptr frame, int index)
+static int producer_alive_get_frame(mlt_producer producer, mlt_frame_ptr frame, int index)
 {
     *frame = mlt_frame_init(MLT_PRODUCER_SERVICE(producer));
     mlt_properties frame_properties = MLT_FRAME_PROPERTIES(*frame);
@@ -223,14 +223,14 @@ static int producer_get_frame(mlt_producer producer, mlt_frame_ptr frame, int in
 
     mlt_frame_set_position(*frame, mlt_producer_position(producer));
     mlt_frame_push_service(*frame, producer);
-    mlt_frame_push_get_image(*frame, get_image);
+    mlt_frame_push_get_image(*frame, produce_alive_get_image);
     mlt_producer_prepare_next(producer);
     return 0;
 }
 
 /** Close the producer.
  */
-static void producer_close(mlt_producer producer)
+static void producer_alive_close(mlt_producer producer)
 {
     delete static_cast<Alive *>(producer->child);
     producer->close = nullptr;
